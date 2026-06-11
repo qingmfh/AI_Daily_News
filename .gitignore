@@ -51,4 +51,7 @@ next-env.d.ts
 AGENTS.md
 CLAUDE.md
 
+# local development docs
+docs/
+
 ai_daily_news/
