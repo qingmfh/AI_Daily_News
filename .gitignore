@@ -47,4 +47,8 @@ next-env.d.ts
 .vscode/
 .idea/
 
+# local agent instructions
+AGENTS.md
+CLAUDE.md
+
 ai_daily_news/
