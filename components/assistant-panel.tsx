@@ -289,7 +289,7 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
             ) : (
               <span className="inline-flex items-center gap-2 text-stone-500">
                 <Loader2 className="size-4 animate-spin text-orange-700" />
-                正在组织回答
+                Thinking
               </span>
             )
           ) : (

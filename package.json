@@ -24,6 +24,8 @@
     "openai": "^6.42.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "rss-parser": "^3.13.0",
     "shadcn": "^4.10.0",
     "tailwind-merge": "^3.6.0",
