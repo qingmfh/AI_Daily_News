@@ -8,19 +8,34 @@ import {
   useState,
 } from 'react';
 import {
+  BarChart3,
+  BookOpen,
   Bot,
+  CalendarDays,
   ChevronDown,
+  GitBranch,
   Grip,
+  Lightbulb,
+  ListChecks,
   Loader2,
+  Search,
+  Wrench,
   X,
 } from 'lucide-react';
 import { usePathname } from 'next/navigation';
+import { AssistantActionCards } from '@/components/assistant-action-cards';
 import { useAssistantPageContext } from '@/components/assistant-page-context';
 import { MarkdownRenderer } from '@/components/markdown-renderer';
+import {
+  getAssistantQuickIntents,
+  type AssistantAction,
+  type AssistantIntentId,
+} from '@/lib/ai/assistant-workbench';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
+  actions?: AssistantAction[];
 };
 
 interface AssistantPanelProps {
@@ -95,6 +110,61 @@ function replaceLastAssistant(messages: ChatMessage[], content: string): ChatMes
   return [...nextMessages, { role: 'assistant', content }];
 }
 
+function setLastAssistantActions(messages: ChatMessage[], actions: AssistantAction[]): ChatMessage[] {
+  if (actions.length === 0) {
+    return messages;
+  }
+
+  const nextMessages = [...messages];
+  for (let index = nextMessages.length - 1; index >= 0; index -= 1) {
+    if (nextMessages[index].role === 'assistant') {
+      nextMessages[index] = {
+        ...nextMessages[index],
+        actions,
+      };
+      return nextMessages;
+    }
+  }
+
+  return messages;
+}
+
+function parseAssistantActions(value: string | null): AssistantAction[] {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(decodeURIComponent(value));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function getIntentIcon(intent: AssistantIntentId) {
+  switch (intent) {
+    case 'today_focus':
+      return CalendarDays;
+    case 'weekly_agent':
+      return GitBranch;
+    case 'latest_papers':
+      return BookOpen;
+    case 'new_tools':
+      return Wrench;
+    case 'study_plan':
+      return ListChecks;
+    case 'summarize_current':
+      return Lightbulb;
+    case 'why_current':
+      return BarChart3;
+    case 'related_current':
+      return Search;
+    case 'compare_current':
+      return BarChart3;
+  }
+}
+
 export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
   const pathname = usePathname();
   const itemId = getCurrentItemId(pathname);
@@ -113,6 +183,7 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
   const desktopMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const mobileMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const panelHeight = getPanelHeight(viewportHeight);
+  const quickIntents = getAssistantQuickIntents(itemId ? 'detail' : 'home');
 
   useEffect(() => {
     onOpenChange?.(isOpen);
@@ -196,7 +267,7 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
     window.addEventListener('pointerup', handleUp);
   };
 
-  const askAssistant = async (question: string) => {
+  const askAssistant = async (question: string, intent?: AssistantIntentId) => {
     const trimmed = question.trim();
     if (!trimmed || isLoading) {
       return;
@@ -219,6 +290,7 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
         },
         body: JSON.stringify({
           message: trimmed,
+          intent,
           itemId,
           pageContent: pageContext?.content,
           history,
@@ -234,6 +306,7 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
         throw new Error('AI 助手没有返回可读取的响应流');
       }
 
+      const actions = parseAssistantActions(response.headers.get('X-Assistant-Actions'));
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
 
@@ -253,6 +326,8 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
       if (rest) {
         setMessages((current) => appendToLastAssistant(current, rest));
       }
+
+      setMessages((current) => setLastAssistantActions(current, actions));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'AI 助手请求失败';
       setMessages((current) => replaceLastAssistant(current, `抱歉，${errorMessage}`));
@@ -272,6 +347,28 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
     }
   };
 
+  const renderQuickIntents = () => (
+    <div className="mb-2 grid grid-cols-2 gap-2">
+      {quickIntents.map((intent) => {
+        const Icon = getIntentIcon(intent.id);
+
+        return (
+          <button
+            key={intent.id}
+            type="button"
+            title={intent.description}
+            disabled={isLoading}
+            onClick={() => void askAssistant(intent.message, intent.id)}
+            className="flex h-9 min-w-0 items-center gap-2 rounded-lg border border-orange-100 bg-white px-2.5 text-left text-xs font-medium text-stone-700 transition-colors hover:border-orange-200 hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Icon className="size-3.5 shrink-0 text-orange-700" />
+            <span className="truncate">{intent.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   const renderMessages = (endRef: typeof desktopMessagesEndRef, mobile = false) => (
     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-lg border border-orange-100 bg-white p-3">
       {messages.map((item, index) => (
@@ -285,7 +382,14 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
         >
           {item.role === 'assistant' ? (
             item.content ? (
-              <MarkdownRenderer content={item.content} />
+              <>
+                <MarkdownRenderer content={item.content} />
+                <AssistantActionCards
+                  actions={item.actions}
+                  disabled={isLoading}
+                  onPrompt={(nextMessage, intent) => void askAssistant(nextMessage, intent)}
+                />
+              </>
             ) : (
               <span className="inline-flex items-center gap-2 text-stone-500">
                 <Loader2 className="size-4 animate-spin text-orange-700" />
@@ -369,6 +473,7 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col p-3">
+              {renderQuickIntents()}
               {renderMessages(desktopMessagesEndRef)}
               {renderComposer()}
             </div>
@@ -400,6 +505,7 @@ export function AssistantPanel({ onOpenChange }: AssistantPanelProps) {
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col p-3">
+              {renderQuickIntents()}
               {renderMessages(mobileMessagesEndRef, true)}
               {renderComposer()}
             </div>

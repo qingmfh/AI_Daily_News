@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAssistantChatStream, type AssistantMessage } from '@/lib/ai/chat';
 import {
+  buildAssistantActions,
+  type AssistantIntentId,
+} from '@/lib/ai/assistant-workbench';
+import {
   getAssistantReferenceItems,
   getItemById,
   type AssistantReferenceItem,
@@ -9,6 +13,7 @@ import { parseJsonArray } from '@/lib/utils';
 
 type ChatRequestBody = {
   message?: string;
+  intent?: AssistantIntentId;
   itemId?: number;
   pageContent?: string;
   history?: AssistantMessage[];
@@ -111,6 +116,14 @@ function buildReferenceFooter(items: AssistantReferenceItem[]) {
   return `\n\n---\n参考情报\n${lines.join('\n')}`;
 }
 
+function encodeActionsHeader(actions: ReturnType<typeof buildAssistantActions>) {
+  if (actions.length === 0) {
+    return null;
+  }
+
+  return encodeURIComponent(JSON.stringify(actions));
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as ChatRequestBody;
@@ -154,6 +167,14 @@ export async function POST(request: NextRequest) {
       contexts.push(referenceContext);
     }
 
+    const actions = buildAssistantActions({
+      intent: body.intent,
+      message,
+      itemId: body.itemId,
+      hasReferences: referenceItems.length > 0,
+    });
+    const encodedActions = encodeActionsHeader(actions);
+
     const completionStream = await createAssistantChatStream({
       message,
       context: contexts.join('\n\n---\n\n'),
@@ -190,6 +211,7 @@ export async function POST(request: NextRequest) {
         'Content-Type': 'text/plain; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
         'X-Content-Type-Options': 'nosniff',
+        ...(encodedActions ? { 'X-Assistant-Actions': encodedActions } : {}),
       },
     });
   } catch (error) {
