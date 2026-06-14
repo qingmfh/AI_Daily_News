@@ -51,8 +51,41 @@ function ensureCollectionRunProgressColumns() {
   }
 }
 
+function ensureDatabaseIndexes() {
+  const newsItemsTable = sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'news_items'")
+    .get();
+  const collectionRunsTable = sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'collection_runs'")
+    .get();
+
+  if (newsItemsTable) {
+    sqlite.exec(`
+      CREATE INDEX IF NOT EXISTS idx_news_items_published_at ON news_items(published_at);
+      CREATE INDEX IF NOT EXISTS idx_news_items_category ON news_items(category);
+      CREATE INDEX IF NOT EXISTS idx_news_items_importance ON news_items(importance);
+      CREATE INDEX IF NOT EXISTS idx_news_items_status ON news_items(processing_status);
+      CREATE INDEX IF NOT EXISTS idx_news_items_source ON news_items(source);
+      CREATE INDEX IF NOT EXISTS idx_news_items_status_published_importance
+        ON news_items(processing_status, published_at, importance);
+      CREATE INDEX IF NOT EXISTS idx_news_items_category_status_published
+        ON news_items(category, processing_status, published_at);
+    `);
+  }
+
+  if (collectionRunsTable) {
+    sqlite.exec(`
+      CREATE INDEX IF NOT EXISTS idx_collection_runs_status_started
+        ON collection_runs(status, started_at);
+      CREATE INDEX IF NOT EXISTS idx_collection_runs_status_heartbeat
+        ON collection_runs(status, heartbeat_at);
+    `);
+  }
+}
+
 // 兼容已有本地数据库，启动时补齐后台任务进度字段。
 ensureCollectionRunProgressColumns();
+ensureDatabaseIndexes();
 
 // 创建 Drizzle 实例
 export const db = drizzle(sqlite, { schema });
@@ -110,5 +143,14 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_news_items_category ON news_items(category);
     CREATE INDEX IF NOT EXISTS idx_news_items_importance ON news_items(importance DESC);
     CREATE INDEX IF NOT EXISTS idx_news_items_status ON news_items(processing_status);
+    CREATE INDEX IF NOT EXISTS idx_news_items_source ON news_items(source);
+    CREATE INDEX IF NOT EXISTS idx_news_items_status_published_importance
+      ON news_items(processing_status, published_at, importance);
+    CREATE INDEX IF NOT EXISTS idx_news_items_category_status_published
+      ON news_items(category, processing_status, published_at);
+    CREATE INDEX IF NOT EXISTS idx_collection_runs_status_started
+      ON collection_runs(status, started_at);
+    CREATE INDEX IF NOT EXISTS idx_collection_runs_status_heartbeat
+      ON collection_runs(status, heartbeat_at);
   `);
 }

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { index, sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
 
 // 情报条目表
 export const newsItems = sqliteTable('news_items', {
@@ -25,7 +25,23 @@ export const newsItems = sqliteTable('news_items', {
   viewCount: integer('view_count').default(0),
   createdAt: text('created_at').default(''),
   updatedAt: text('updated_at').default(''),
-});
+}, (table) => [
+  index('idx_news_items_published_at').on(table.publishedAt),
+  index('idx_news_items_category').on(table.category),
+  index('idx_news_items_importance').on(table.importance),
+  index('idx_news_items_status').on(table.processingStatus),
+  index('idx_news_items_source').on(table.source),
+  index('idx_news_items_status_published_importance').on(
+    table.processingStatus,
+    table.publishedAt,
+    table.importance
+  ),
+  index('idx_news_items_category_status_published').on(
+    table.category,
+    table.processingStatus,
+    table.publishedAt
+  ),
+]);
 
 // 采集任务日志表
 export const collectionRuns = sqliteTable('collection_runs', {
@@ -43,7 +59,10 @@ export const collectionRuns = sqliteTable('collection_runs', {
   workerId: text('worker_id').default(''),
   heartbeatAt: text('heartbeat_at').default(''),
   error: text('error'),
-});
+}, (table) => [
+  index('idx_collection_runs_status_started').on(table.status, table.startedAt),
+  index('idx_collection_runs_status_heartbeat').on(table.status, table.heartbeatAt),
+]);
 
 // 导出类型
 export type NewsItem = typeof newsItems.$inferSelect;

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, like, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, like, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { db } from './client';
 import { newsItems, collectionRuns } from './schema';
 import { getStartOfToday, normalizePublishedDate } from '@/lib/utils';
@@ -7,6 +7,115 @@ interface ItemFilters {
   category?: string;
   importance?: string;
   search?: string;
+}
+
+export type AssistantReferenceItem = {
+  id: number;
+  url: string;
+  title: string;
+  titleCn: string | null;
+  summary: string | null;
+  summaryCn: string | null;
+  source: string;
+  category: string | null;
+  tags: string | null;
+  keyPoints: string | null;
+  importance: number | null;
+  reason: string | null;
+  publishedAt: string | null;
+};
+
+const ASSISTANT_REFERENCE_LIMIT = 8;
+const ASSISTANT_SIGNAL_TERMS = [
+  'Agent',
+  'AI',
+  'Claude',
+  'GPT',
+  'OpenAI',
+  'Google',
+  'Meta',
+  'Microsoft',
+  '模型',
+  '智能体',
+  '多模态',
+  '推理',
+  '安全',
+  '训练',
+  '数据',
+  '芯片',
+  '编程',
+  '代码',
+  '开源',
+  '论文',
+  '工具',
+  '产品',
+];
+
+const CATEGORY_ALIASES: Array<{ category: string; aliases: string[] }> = [
+  { category: 'paper', aliases: ['论文', 'paper', 'arxiv', '研究'] },
+  { category: 'project', aliases: ['开源', '项目', 'github', 'repo', 'repository'] },
+  { category: 'tool', aliases: ['工具', '产品', '框架', 'sdk', '库', '平台'] },
+  { category: 'opinion', aliases: ['观点', '评论', '分析'] },
+  { category: 'news', aliases: ['新闻', '动态', '发布', '进展'] },
+];
+
+function inferAssistantCategories(query: string) {
+  const normalized = query.toLowerCase();
+  return CATEGORY_ALIASES
+    .filter(({ aliases }) => aliases.some((alias) => normalized.includes(alias.toLowerCase())))
+    .map(({ category }) => category);
+}
+
+function inferAssistantSince(query: string): string | null {
+  if (/今天|今日/.test(query)) {
+    return getStartOfToday();
+  }
+
+  if (/本周|一周|7\s*天|七天/.test(query)) {
+    return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  return null;
+}
+
+function extractAssistantSearchTerms(query: string) {
+  const normalized = query.trim();
+  const terms = new Set<string>();
+
+  for (const match of normalized.matchAll(/[A-Za-z][A-Za-z0-9._-]{1,}/g)) {
+    terms.add(match[0]);
+  }
+
+  const lowerQuery = normalized.toLowerCase();
+  for (const term of ASSISTANT_SIGNAL_TERMS) {
+    if (lowerQuery.includes(term.toLowerCase())) {
+      terms.add(term);
+    }
+  }
+
+  return Array.from(terms).slice(0, 8);
+}
+
+function hasAssistantReferenceIntent(query: string) {
+  return /重点|重要|总结|日报|清单|推荐|有哪些|有什么|比较|对比|趋势|动态|进展|本周|今天|今日/.test(query);
+}
+
+function selectAssistantReferenceFields() {
+  return {
+    id: newsItems.id,
+    url: newsItems.url,
+    title: newsItems.title,
+    titleCn: newsItems.titleCn,
+    summary: newsItems.summary,
+    summaryCn: newsItems.summaryCn,
+    source: newsItems.source,
+    category: newsItems.category,
+    tags: newsItems.tags,
+    keyPoints: newsItems.keyPoints,
+    importance: newsItems.importance,
+    reason: newsItems.reason,
+    publishedAt: newsItems.publishedAt,
+  };
 }
 
 function parseCategoryFilter(category?: string): string[] {
@@ -149,6 +258,94 @@ export async function getItemById(id: number) {
     .where(eq(newsItems.id, id))
     .limit(1);
   return item || null;
+}
+
+/**
+ * 为 AI 助手检索一小组可引用情报。
+ *
+ * 这是轻量级 SQL 检索，不做向量召回；优先服务“今天/本周/某主题/某分类”
+ * 这类情报问答，并把当前详情页条目放在引用列表首位。
+ */
+export async function getAssistantReferenceItems({
+  query,
+  itemId,
+  limit = ASSISTANT_REFERENCE_LIMIT,
+}: {
+  query: string;
+  itemId?: number;
+  limit?: number;
+}): Promise<AssistantReferenceItem[]> {
+  const references: AssistantReferenceItem[] = [];
+  const seenIds = new Set<number>();
+
+  if (itemId) {
+    const currentItem = await getItemById(itemId);
+    if (currentItem && currentItem.processingStatus !== 'invalid') {
+      references.push(currentItem);
+      seenIds.add(currentItem.id);
+    }
+  }
+
+  const categories = inferAssistantCategories(query);
+  const since = inferAssistantSince(query);
+  const terms = extractAssistantSearchTerms(query);
+  const shouldSearch = Boolean(since || categories.length > 0 || terms.length > 0 || hasAssistantReferenceIntent(query));
+
+  if (!shouldSearch || references.length >= limit) {
+    return references.slice(0, limit);
+  }
+
+  const conditions: SQL[] = [
+    sql`${newsItems.processingStatus} != 'invalid'`,
+  ];
+
+  if (seenIds.size > 0) {
+    conditions.push(notInArray(newsItems.id, Array.from(seenIds)));
+  }
+
+  if (since) {
+    conditions.push(gte(newsItems.publishedAt, since));
+  }
+
+  if (categories.length === 1) {
+    conditions.push(eq(newsItems.category, categories[0]));
+  } else if (categories.length > 1) {
+    conditions.push(inArray(newsItems.category, categories));
+  }
+
+  if (terms.length > 0) {
+    const termConditions = terms.flatMap((term) => {
+      const pattern = `%${term}%`;
+      return [
+        like(newsItems.title, pattern),
+        like(newsItems.titleCn, pattern),
+        like(newsItems.summary, pattern),
+        like(newsItems.summaryCn, pattern),
+        like(newsItems.tags, pattern),
+        like(newsItems.source, pattern),
+      ];
+    });
+    const searchCondition = or(...termConditions);
+    if (searchCondition) {
+      conditions.push(searchCondition);
+    }
+  }
+
+  const items = await db
+    .select(selectAssistantReferenceFields())
+    .from(newsItems)
+    .where(and(...conditions))
+    .orderBy(desc(newsItems.importance), desc(newsItems.publishedAt), desc(newsItems.id))
+    .limit(Math.max(0, limit - references.length));
+
+  for (const item of items) {
+    if (!seenIds.has(item.id)) {
+      references.push(item);
+      seenIds.add(item.id);
+    }
+  }
+
+  return references;
 }
 
 /**
